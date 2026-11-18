@@ -50,8 +50,6 @@ workflows:
             exit 1
           fi
 
-          echo "Found nested archive: $INNER_ZIP"
-
           python3 - "$INNER_ZIP" "$INNER_DIR" <<'PY'
           import sys
           import zipfile
@@ -151,13 +149,11 @@ workflows:
           set -euo pipefail
 
           PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
-
           cd "$PROJECT_ROOT"
 
           chmod +x ./gradlew
 
-          ./gradlew \
-            :composeApp:linkReleaseFrameworkIosArm64 \
+          ./gradlew :composeApp:linkReleaseFrameworkIosArm64 \
             --no-daemon \
             --stacktrace
 
@@ -171,12 +167,24 @@ workflows:
 
           echo "Kotlin framework built successfully."
 
+      - name: Diagnose Kotlin framework exports
+        script: |
+          set -euo pipefail
+
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
+          FRAMEWORK="$PROJECT_ROOT/composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework"
+
+          echo "Framework headers:"
+          find "$FRAMEWORK/Headers" -maxdepth 2 -type f -print
+
+          echo "Searching for MainViewController:"
+          grep -R -n "MainViewController" "$FRAMEWORK/Headers" || true
+
       - name: Generate iOS Xcode project
         script: |
           set -euo pipefail
 
           PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
-
           cd "$PROJECT_ROOT"
 
           if ! command -v xcodegen >/dev/null 2>&1; then
@@ -215,7 +223,7 @@ workflows:
           SWIFT
 
           cat > iosApp/project.yml <<'YAML'
-          name: THE_MAPPS
+          name: THE_MAPPS_iOS
 
           options:
             bundleIdPrefix: com.themapps
@@ -223,7 +231,7 @@ workflows:
               iOS: "16.0"
 
           targets:
-            THE_MAPPS:
+            THE_MAPPS_iOS:
               type: application
               platform: iOS
 
@@ -239,6 +247,7 @@ workflows:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.themapps.ios
                   PRODUCT_NAME: THE_MAPPS
+                  PRODUCT_MODULE_NAME: THE_MAPPS_iOS
                   SWIFT_VERSION: "5.0"
                   IPHONEOS_DEPLOYMENT_TARGET: "16.0"
                   TARGETED_DEVICE_FAMILY: "1,2"
@@ -247,13 +256,14 @@ workflows:
                   CODE_SIGNING_ALLOWED: NO
                   CODE_SIGNING_REQUIRED: NO
                   CODE_SIGN_IDENTITY: ""
+
           YAML
 
           xcodegen generate \
             --spec iosApp/project.yml \
             --project iosApp
 
-          test -d iosApp/THE_MAPPS.xcodeproj
+          test -d iosApp/THE_MAPPS_iOS.xcodeproj
 
       - name: Build unsigned iOS app and package IPA
         script: |
@@ -265,8 +275,8 @@ workflows:
           cd "$PROJECT_ROOT"
 
           xcodebuild \
-            -project iosApp/THE_MAPPS.xcodeproj \
-            -scheme THE_MAPPS \
+            -project iosApp/THE_MAPPS_iOS.xcodeproj \
+            -scheme THE_MAPPS_iOS \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
