@@ -109,29 +109,22 @@ workflows:
 
           ls -la "$PROJECT_DIR"
 
-      - name: Prepare Kotlin iOS bridge
+      - name: Verify existing MainViewController
         script: |
           set -e
           cd "$THE_MAPPS_PROJECT_DIR"
 
-          BRIDGE_DIR="composeApp/src/iosMain/kotlin/com/themapps"
-          mkdir -p "$BRIDGE_DIR"
+          echo "Searching for existing MainViewController.kt..."
 
-          cat > "$BRIDGE_DIR/MainViewController.kt" <<'KOTLIN'
-          package com.themapps
+          find composeApp/src -name "MainViewController.kt" -print
 
-          import androidx.compose.ui.window.ComposeUIViewController
-          import platform.UIKit.UIViewController
+          if [ ! -f "composeApp/src/commonMain/kotlin/com/themapps/MainViewController.kt" ]; then
+            echo "ERROR: Original MainViewController.kt was not found!"
+            exit 1
+          fi
 
-          fun MainViewController(): UIViewController {
-              return ComposeUIViewController {
-                  App()
-              }
-          }
-          KOTLIN
-
-          echo "Kotlin iOS bridge prepared"
-          cat "$BRIDGE_DIR/MainViewController.kt"
+          echo "Using the original MainViewController.kt"
+          cat composeApp/src/commonMain/kotlin/com/themapps/MainViewController.kt
 
       - name: Build Kotlin Native framework
         script: |
@@ -152,6 +145,7 @@ workflows:
           fi
 
           echo "Framework successfully built"
+
           find "$FRAMEWORK/Headers" -maxdepth 2 -type f -print
 
           echo "FRAMEWORK_PATH=$FRAMEWORK" >> "$CM_ENV"
