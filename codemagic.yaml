@@ -1,9 +1,9 @@
 
 workflows:
   themapps-ios:
-    name: THE_MAPPS iOS
+    name: THE_MAPPS iOS Framework
     max_build_duration: 120
-    instance_type: mac_mini_m2
+    instance_type: Mac16,2
 
     environment:
       xcode: latest
@@ -24,80 +24,84 @@ workflows:
           mkdir -p "$CM_BUILD_DIR/project"
           unzip -q "$ARCHIVE" -d "$CM_BUILD_DIR/project"
 
-          echo "Archive extracted."
-          find "$CM_BUILD_DIR/project" -maxdepth 4 \
-            \( -name "settings.gradle.kts" \
-            -o -name "build.gradle.kts" \
-            -o -name "*.xcodeproj" \
-            -o -name "*.xcworkspace" \) -print
+          echo "Archive extracted successfully."
 
-      - name: Locate project
+      - name: Locate Gradle project
         script: |
           set -e
 
           PROJECT_DIR="$CM_BUILD_DIR/project"
 
-          SETTINGS=$(find "$PROJECT_DIR" -name settings.gradle.kts -print -quit)
+          SETTINGS=$(find "$PROJECT_DIR" \
+            -name settings.gradle.kts \
+            -print -quit)
 
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: settings.gradle.kts not found"
+            find "$PROJECT_DIR" -maxdepth 5 -type f
             exit 1
           fi
 
           PROJECT_ROOT=$(dirname "$SETTINGS")
-          echo "Project root: $PROJECT_ROOT"
 
+          echo "Project root: $PROJECT_ROOT"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$CM_ENV"
 
-          find "$PROJECT_ROOT" -maxdepth 4 -type f | head -200
-
-      - name: Check iOS project
+      - name: Check iOS target
         script: |
           set -e
           cd "$PROJECT_ROOT"
 
-          if [ ! -d "iosApp" ]; then
-            echo "No iosApp directory found."
-            echo "The project may need an iOS Xcode project or framework setup."
+          if [ ! -f "./gradlew" ]; then
+            echo "ERROR: Gradle wrapper not found."
             exit 1
           fi
 
-          find iosApp -maxdepth 3 -type f -print
+          chmod +x ./gradlew
 
-      - name: Build iOS
+          echo "===== GRADLE VERSION ====="
+          ./gradlew --version
+
+          echo "===== IOS TASKS ====="
+          ./gradlew :composeApp:tasks --all \
+            --no-daemon | grep -Ei 'ios|framework|link' || true
+
+      - name: Build THE_MAPPS iOS framework
         script: |
           set -e
-          cd "$PROJECT_ROOT/iosApp"
+          cd "$PROJECT_ROOT"
 
-          if [ -d "*.xcworkspace" ]; then
-            echo "Workspace detected"
-          fi
+          ./gradlew :composeApp:linkReleaseFrameworkIosArm64 \
+            --no-daemon \
+            --stacktrace
 
-          WORKSPACE=$(find . -maxdepth 2 -name "*.xcworkspace" -print -quit)
-          PROJECT=$(find . -maxdepth 2 -name "*.xcodeproj" -print -quit)
+          echo "===== FRAMEWORK OUTPUT ====="
 
-          if [ -n "$WORKSPACE" ]; then
-            xcodebuild \
-              -workspace "$WORKSPACE" \
-              -scheme "$(basename "$WORKSPACE" .xcworkspace)" \
-              -sdk iphonesimulator \
-              -configuration Debug \
-              -destination 'generic/platform=iOS Simulator' \
-              CODE_SIGNING_ALLOWED=NO \
-              build
-          elif [ -n "$PROJECT" ]; then
-            xcodebuild \
-              -project "$PROJECT" \
-              -sdk iphonesimulator \
-              -configuration Debug \
-              -destination 'generic/platform=iOS Simulator' \
-              CODE_SIGNING_ALLOWED=NO \
-              build
-          else
-            echo "ERROR: No Xcode project or workspace found."
+          find composeApp/build \
+            -name "THE_MAPPS.framework" \
+            -print
+
+      - name: Verify framework
+        script: |
+          set -e
+          cd "$PROJECT_ROOT"
+
+          FRAMEWORK=$(find composeApp/build \
+            -name "THE_MAPPS.framework" \
+            -type d -print -quit)
+
+          if [ -z "$FRAMEWORK" ]; then
+            echo "ERROR: THE_MAPPS.framework was not generated."
             exit 1
           fi
 
+          echo "SUCCESS: $FRAMEWORK"
+          ls -la "$FRAMEWORK"
+
     artifacts:
-      - /tmp/xcodebuild_logs/*.log
-      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $CM_BUILD_DIR/project/**/THE_MAPPS.framework
+      - $CM_BUILD_DIR/project/composeApp/build/outputs/**
+
+    publishing:
+      email:
+        recipients: []
