@@ -1,198 +1,136 @@
-
 workflows:
   themapps-ios:
-    name: THE_MAPPS iOS
-    max_build_duration: 120
+    name: THE_MAPPS iOS Build
     instance_type: mac_mini_m2
 
     environment:
+      xcode: latest
       vars:
         APP_NAME: THE_MAPPS
-        BUNDLE_ID: com.themapps.ios
-        RELEASE_URL: "https://github.com/YaDa42/MAPS/releases/download/%601/THE_MAPPS_starter.zip"
-      xcode: latest
+        XCODE_PROJECT: iosApp/THE_MAPPS_iOS.xcodeproj
+        XCODE_SCHEME: THE_MAPPS_iOS
+        ARCHIVE_URL: "https://github.com/YaDa42/MAPS/releases/download/%601/THE_MAPPS_starter.zip"
 
     scripts:
-      - name: Download project archive
+      - name: Install dependencies
         script: |
           set -e
-          cd "$CM_BUILD_DIR"
 
-          curl -L --fail --show-error \
-            "$RELEASE_URL" \
-            -o THE_MAPPS_starter.zip
+          brew update
+          brew install xcodegen
 
-          ls -lh THE_MAPPS_starter.zip
+          python3 --version
+          xcodebuild -version
+          xcodegen --version
 
-      - name: Extract project archives
+      - name: Download and extract project
         script: |
           set -e
+
           cd "$CM_BUILD_DIR"
 
-          mkdir -p extracted_outer extracted_project
+          echo "Downloading THE_MAPPS starter archive..."
 
-          python3 - <<'PY'
+          curl -fL "$ARCHIVE_URL" -o outer.zip
+
+          mkdir -p extracted_outer
+          unzip -q outer.zip -d extracted_outer
+
+          echo "Searching for nested Maps.zip..."
+
+          python3 <<'PY'
+          import os
           import zipfile
-          from pathlib import Path
 
-          archive = Path("THE_MAPPS_starter.zip")
-          outer = Path("extracted_outer")
-          destination = Path("extracted_project")
+          base = os.path.join(os.environ["CM_BUILD_DIR"], "extracted_outer")
+          output = os.path.join(os.environ["CM_BUILD_DIR"], "extracted_inner")
 
-          with zipfile.ZipFile(archive) as z:
+          os.makedirs(output, exist_ok=True)
+
+          archives = []
+
+          for root, dirs, files in os.walk(base):
+              for name in files:
+                  if name.lower() == "maps.zip":
+                      archives.append(os.path.join(root, name))
+
+          if not archives:
+              raise SystemExit("ERROR: Maps.zip was not found")
+
+          archive = archives[0]
+          print("Found:", archive)
+
+          with zipfile.ZipFile(archive, "r") as z:
               for item in z.infolist():
-                  parts = Path(item.filename).parts
-
-                  if any(" Ử" in part for part in parts):
-                      print("Skipping invalid path:", item.filename)
+                  if " Ử" in item.filename:
+                      print("Skipping:", item.filename)
                       continue
 
-                  if not item.filename:
-                      continue
+                  z.extract(item, output)
 
-                  target = outer.joinpath(*parts)
-
-                  if item.is_dir():
-                      target.mkdir(parents=True, exist_ok=True)
-                  else:
-                      target.parent.mkdir(parents=True, exist_ok=True)
-                      with z.open(item) as source, open(target, "wb") as output:
-                          output.write(source.read())
-
-          maps_archives = list(outer.rglob("Maps.zip"))
-
-          if not maps_archives:
-              raise SystemExit("Maps.zip was not found in the downloaded archive")
-
-          maps_archive = maps_archives[0]
-          print("Found:", maps_archive)
-
-          with zipfile.ZipFile(maps_archive) as z:
-              for item in z.infolist():
-                  parts = Path(item.filename).parts
-
-                  if any(" Ử" in part for part in parts):
-                      print("Skipping invalid path:", item.filename)
-                      continue
-
-                  if not item.filename:
-                      continue
-
-                  target = destination.joinpath(*parts)
-
-                  if item.is_dir():
-                      target.mkdir(parents=True, exist_ok=True)
-                  else:
-                      target.parent.mkdir(parents=True, exist_ok=True)
-                      with z.open(item) as source, open(target, "wb") as output:
-                          output.write(source.read())
-
-          print("Project archives extracted successfully")
+          print("Nested archive extracted.")
           PY
 
-      - name: Locate Gradle project
-        script: |
-          set -e
-          cd "$CM_BUILD_DIR"
+          echo "Locating Gradle project..."
 
-          SETTINGS_FILE="$(find extracted_project -name settings.gradle.kts -print -quit)"
+          PROJECT_ROOT=""
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "settings.gradle.kts was not found"
+          while IFS= read -r file; do
+            PROJECT_ROOT="$(dirname "$file")"
+            break
+          done < <(find "$CM_BUILD_DIR/extracted_inner" -name settings.gradle.kts -type f)
+
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "ERROR: settings.gradle.kts not found"
             exit 1
           fi
 
-          PROJECT_DIR="$(cd "$(dirname "$SETTINGS_FILE")" && pwd)"
+          echo "Project root: $PROJECT_ROOT"
 
-          echo "THE_MAPPS_PROJECT_DIR=$PROJECT_DIR" >> "$CM_ENV"
-          echo "Project directory: $PROJECT_DIR"
+          echo "$PROJECT_ROOT" > "$CM_BUILD_DIR/project_root.txt"
 
-          ls -la "$PROJECT_DIR"
-
-      - name: Verify existing MainViewController
+      - name: Build Kotlin iOS framework
         script: |
           set -e
-          cd "$THE_MAPPS_PROJECT_DIR"
 
-          echo "Searching for existing MainViewController.kt..."
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/project_root.txt")"
 
-          find composeApp/src -name "MainViewController.kt" -print
-
-          if [ ! -f "composeApp/src/commonMain/kotlin/com/themapps/MainViewController.kt" ]; then
-            echo "ERROR: Original MainViewController.kt was not found!"
-            exit 1
-          fi
-
-          echo "Using the original MainViewController.kt"
-          cat composeApp/src/commonMain/kotlin/com/themapps/MainViewController.kt
-
-      - name: Build Kotlin Native framework
-        script: |
-          set -e
-          cd "$THE_MAPPS_PROJECT_DIR"
+          cd "$PROJECT_ROOT"
 
           chmod +x ./gradlew
 
-          ./gradlew :composeApp:linkReleaseFrameworkIosArm64 \
+          ./gradlew \
+            :composeApp:linkReleaseFrameworkIosArm64 \
             --no-daemon \
             --stacktrace
 
-          FRAMEWORK="$THE_MAPPS_PROJECT_DIR/composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework"
+          FRAMEWORK_PATH="$PROJECT_ROOT/composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework"
 
-          if [ ! -d "$FRAMEWORK" ]; then
-            echo "THE_MAPPS.framework was not created"
+          if [ ! -d "$FRAMEWORK_PATH" ]; then
+            echo "ERROR: THE_MAPPS.framework not found"
+            find "$PROJECT_ROOT/composeApp/build" -name "*.framework" -type d
             exit 1
           fi
 
-          echo "Framework successfully built"
+          echo "Framework successfully built:"
+          ls -la "$FRAMEWORK_PATH"
 
-          find "$FRAMEWORK/Headers" -maxdepth 2 -type f -print
+          echo "$FRAMEWORK_PATH" > "$CM_BUILD_DIR/framework_path.txt"
 
-          echo "FRAMEWORK_PATH=$FRAMEWORK" >> "$CM_ENV"
-
-      - name: Check framework headers
+      - name: Generate iOS application project
         script: |
           set -e
 
-          echo "Framework headers:"
-          find "$FRAMEWORK_PATH/Headers" -maxdepth 2 -type f -print
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/project_root.txt")"
+          FRAMEWORK_PATH="$(cat "$CM_BUILD_DIR/framework_path.txt")"
 
-          echo "MainViewController references:"
-          grep -R -n "MainViewController" "$FRAMEWORK_PATH/Headers" || true
-
-      - name: Install XcodeGen
-        script: |
-          set -e
-
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
-
-          xcodegen --version
-
-      - name: Generate iOS Xcode project
-        script: |
-          set -e
-          cd "$THE_MAPPS_PROJECT_DIR"
+          cd "$PROJECT_ROOT"
 
           mkdir -p iosApp
 
-          cat > iosApp/THE_MAPPSApp.swift <<'SWIFT'
-          import SwiftUI
-
-          @main
-          struct THE_MAPPSApp: App {
-              var body: some Scene {
-                  WindowGroup {
-                      ContentView().ignoresSafeArea()
-                  }
-              }
-          }
-          SWIFT
-
           cat > iosApp/ContentView.swift <<'SWIFT'
           import SwiftUI
-          import THE_MAPPS
+          import UIKit
 
           struct ContentView: UIViewControllerRepresentable {
               func makeUIViewController(context: Context) -> UIViewController {
@@ -202,17 +140,32 @@ workflows:
               func updateUIViewController(
                   _ uiViewController: UIViewController,
                   context: Context
-              ) {}
+              ) {
+              }
+          }
+
+          @main
+          struct THE_MAPPS_iOSApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
           }
           SWIFT
 
-          cat > iosApp/project.yml <<'YAML'
+          cat > iosApp/project.yml <<YAML
           name: THE_MAPPS_iOS
 
           options:
-            bundleIdPrefix: com.themapps
+            bundleIdPrefix: com.themapps.ios
             deploymentTarget:
-              iOS: "16.0"
+              iOS: "15.0"
+
+          settings:
+            base:
+              SWIFT_VERSION: "5.0"
+              IPHONEOS_DEPLOYMENT_TARGET: "15.0"
 
           targets:
             THE_MAPPS_iOS:
@@ -220,91 +173,137 @@ workflows:
               platform: iOS
 
               sources:
-                - path: THE_MAPPSApp.swift
                 - path: ContentView.swift
 
               dependencies:
-                - framework: ../composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework
-                  embed: false
+                - framework:
+                    path: $FRAMEWORK_PATH
+                    embed: true
 
               settings:
                 base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.themapps.ios
                   PRODUCT_NAME: THE_MAPPS
                   PRODUCT_MODULE_NAME: THE_MAPPS_iOS
-                  SWIFT_VERSION: "5.0"
-                  IPHONEOS_DEPLOYMENT_TARGET: "16.0"
-                  TARGETED_DEVICE_FAMILY: "1,2"
+                  PRODUCT_BUNDLE_IDENTIFIER: com.themapps.ios
                   GENERATE_INFOPLIST_FILE: YES
                   INFOPLIST_KEY_CFBundleDisplayName: THE_MAPPS
                   INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone: YES
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  SUPPORTS_MACCATALYST: NO
                   CODE_SIGNING_ALLOWED: NO
                   CODE_SIGNING_REQUIRED: NO
                   CODE_SIGN_IDENTITY: ""
           YAML
 
           cd iosApp
+
           xcodegen generate
 
-          echo "Xcode project generated"
-          ls -la
+          echo "Generated Xcode project:"
+          ls -la THE_MAPPS_iOS.xcodeproj
 
-      - name: Build unsigned iOS application
+      - name: Build iOS application
         script: |
           set -e
-          cd "$THE_MAPPS_PROJECT_DIR/iosApp"
+
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/project_root.txt")"
+
+          cd "$PROJECT_ROOT"
 
           xcodebuild \
-            -project THE_MAPPS_iOS.xcodeproj \
+            -project iosApp/THE_MAPPS_iOS.xcodeproj \
             -scheme THE_MAPPS_iOS \
             -configuration Release \
             -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath "$CM_BUILD_DIR/ios_derived" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$CM_BUILD_DIR/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
 
-          APP_PATH="$CM_BUILD_DIR/ios_derived/Build/Products/Release-iphoneos/THE_MAPPS.app"
+      - name: Fix and verify Compose Info.plist
+        script: |
+          set -e
+
+          APP_PATH="$CM_BUILD_DIR/build/Build/Products/Release-iphoneos/THE_MAPPS.app"
+          PLIST="$APP_PATH/Info.plist"
 
           if [ ! -d "$APP_PATH" ]; then
-            echo "THE_MAPPS.app was not created"
+            echo "ERROR: THE_MAPPS.app not found"
+            find "$CM_BUILD_DIR/build" -name "*.app" -type d
             exit 1
           fi
 
-          echo "APP_PATH=$APP_PATH" >> "$CM_ENV"
+          if [ ! -f "$PLIST" ]; then
+            echo "ERROR: Info.plist not found"
+            exit 1
+          fi
 
-          echo "Application built successfully"
-          ls -la "$APP_PATH"
+          echo "Setting Compose compatibility key..."
+
+          if /usr/libexec/PlistBuddy \
+            -c "Print :CADisableMinimumFrameDurationOnPhone" \
+            "$PLIST" >/dev/null 2>&1; then
+
+            /usr/libexec/PlistBuddy \
+              -c "Set :CADisableMinimumFrameDurationOnPhone true" \
+              "$PLIST"
+          else
+            /usr/libexec/PlistBuddy \
+              -c "Add :CADisableMinimumFrameDurationOnPhone bool true" \
+              "$PLIST"
+          fi
+
+          echo "=== VERIFY COMPOSE IOS PLIST KEY ==="
+
+          /usr/libexec/PlistBuddy \
+            -c "Print :CADisableMinimumFrameDurationOnPhone" \
+            "$PLIST"
+
+          plutil -lint "$PLIST"
+
+          echo "Info.plist successfully verified."
 
       - name: Package unsigned IPA
         script: |
           set -e
-          cd "$CM_BUILD_DIR"
 
-          mkdir -p ipa_payload/Payload
-          cp -R "$APP_PATH" ipa_payload/Payload/THE_MAPPS.app
+          APP_PATH="$CM_BUILD_DIR/build/Build/Products/Release-iphoneos/THE_MAPPS.app"
+          IPA_PATH="$CM_BUILD_DIR/THE_MAPPS_unsigned.ipa"
 
-          cd ipa_payload
-          zip -r "$CM_BUILD_DIR/THE_MAPPS_unsigned.ipa" Payload
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: Application bundle not found"
+            exit 1
+          fi
 
-          cd "$CM_BUILD_DIR"
+          mkdir -p "$CM_BUILD_DIR/ipa/Payload"
 
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$APP_PATH" \
-            THE_MAPPS.app.zip
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/ipa/Payload/"
 
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$FRAMEWORK_PATH" \
-            THE_MAPPS.framework.zip
+          cd "$CM_BUILD_DIR/ipa"
 
-          echo "Unsigned IPA created"
-          ls -lh THE_MAPPS_unsigned.ipa THE_MAPPS.app.zip THE_MAPPS.framework.zip
+          zip -qry "$IPA_PATH" Payload
+
+          echo "IPA created:"
+          ls -lh "$IPA_PATH"
+
+          echo "=== IPA CONTENTS ==="
+          unzip -l "$IPA_PATH"
+
+          echo "=== VERIFY KEY INSIDE IPA ==="
+
+          mkdir -p "$CM_BUILD_DIR/ipa_verify"
+          unzip -q "$IPA_PATH" -d "$CM_BUILD_DIR/ipa_verify"
+
+          /usr/libexec/PlistBuddy \
+            -c "Print :CADisableMinimumFrameDurationOnPhone" \
+            "$CM_BUILD_DIR/ipa_verify/Payload/THE_MAPPS.app/Info.plist"
+
+          echo "IPA verification completed."
 
     artifacts:
       - THE_MAPPS_unsigned.ipa
-      - THE_MAPPS.app.zip
-      - THE_MAPPS.framework.zip
-      - ios_derived/Build/Products/Release-iphoneos/THE_MAPPS.app
-      - composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework
+      - build/Build/Products/Release-iphoneos/THE_MAPPS.app
+      - "**/*.xcresult"
+      - "**/THE_MAPPS.framework"
