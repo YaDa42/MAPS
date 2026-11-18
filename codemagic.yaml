@@ -102,8 +102,3 @@ workflows:
     artifacts:
       - $CM_BUILD_DIR/project/**/THE_MAPPS.framework
       - $CM_BUILD_DIR/project/composeApp/build/outputs/**
-
-    publishing:
-      email:
-        recipients:
-          - "$CM_EMAIL"
