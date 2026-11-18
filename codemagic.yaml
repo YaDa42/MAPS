@@ -1,3 +1,4 @@
+
 workflows:
   themapps-ios:
     name: THE_MAPPS iOS unsigned IPA
@@ -6,91 +7,297 @@ workflows:
 
     environment:
       vars:
-        REPOSITORY: "YaDa42/MAPS"
-        BRANCH: "main"
         OUTER_ARCHIVE: "THE_MAPPS_starter.zip"
-        GRADLE_VERSION: "9.6.0"
+        INNER_ARCHIVE: "Maps.zip"
       xcode: latest
 
     scripts:
-      - name: Download outer archive from GitHub
+      - name: Download archive from GitHub Releases
         script: |
           set -euo pipefail
-          mkdir -p "$CM_BUILD_DIR/download" "$CM_BUILD_DIR/unpacked"
+
+          DOWNLOAD_DIR="$CM_BUILD_DIR/download"
+          mkdir -p "$DOWNLOAD_DIR"
+
           ARCHIVE_URL="https://github.com/YaDa42/MAPS/releases/download/%601/THE_MAPPS_starter.zip"
-          curl --fail --location --retry 3 "$ARCHIVE_URL" \
-            --output "$CM_BUILD_DIR/download/outer.zip"
-          echo "Downloaded outer archive:"
-          ls -lh "$CM_BUILD_DIR/download/outer.zip"
-          /usr/bin/unzip -t "$CM_BUILD_DIR/download/outer.zip"
+
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "$ARCHIVE_URL" \
+            --output "$DOWNLOAD_DIR/$OUTER_ARCHIVE"
+
+          ls -lh "$DOWNLOAD_DIR/$OUTER_ARCHIVE"
+          /usr/bin/unzip -t "$DOWNLOAD_DIR/$OUTER_ARCHIVE"
 
       - name: Extract outer archive and find nested source archive
         script: |
           set -euo pipefail
+
           OUTER_DIR="$CM_BUILD_DIR/unpacked/outer"
           INNER_DIR="$CM_BUILD_DIR/unpacked/inner"
+
+          rm -rf "$CM_BUILD_DIR/unpacked"
           mkdir -p "$OUTER_DIR" "$INNER_DIR"
 
-          /usr/bin/unzip -q "$CM_BUILD_DIR/download/outer.zip" -d "$OUTER_DIR"
+          /usr/bin/unzip -q \
+            "$CM_BUILD_DIR/download/$OUTER_ARCHIVE" \
+            -d "$OUTER_DIR"
 
-          INNER_ARCHIVE="$(find "$OUTER_DIR" -type f \( -iname '*.zip' -o -iname '*.ZIP' \) -print -quit)"
-          if [ -z "$INNER_ARCHIVE" ]; then
-            echo "ERROR: The downloaded outer archive does not contain a second ZIP archive."
-            echo "Files found inside the outer archive:"
-            find "$OUTER_DIR" -maxdepth 4 -type f -print
+          INNER_ZIP="$(find "$OUTER_DIR" -type f -name "$INNER_ARCHIVE" -print -quit)"
+
+          if [ -z "$INNER_ZIP" ]; then
+            echo "ERROR: Maps.zip was not found."
+            find "$OUTER_DIR" -maxdepth 5 -print
             exit 1
           fi
 
-          echo "Nested archive found: $INNER_ARCHIVE"
-          /usr/bin/unzip -t "$INNER_ARCHIVE"
-          /usr/bin/unzip -q "$INNER_ARCHIVE" -d "$INNER_DIR"
+          echo "Found nested archive: $INNER_ZIP"
 
-          PROJECT_DIR="$(find "$INNER_DIR" -type f \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) -print -quit | xargs -r dirname)"
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: No Gradle project was found inside the nested archive."
-            find "$INNER_DIR" -maxdepth 5 -type f -print
+          python3 - "$INNER_ZIP" "$INNER_DIR" <<'PY'
+          import sys
+          import zipfile
+          import shutil
+          from pathlib import Path, PurePosixPath
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2]).resolve()
+          destination.mkdir(parents=True, exist_ok=True)
+
+          with zipfile.ZipFile(archive, "r") as z:
+              for info in z.infolist():
+                  name = info.filename
+                  parts = PurePosixPath(name).parts
+
+                  if not parts:
+                      continue
+
+                  if " Ử" in parts:
+                      print(f"Skipping problematic directory entry: {name}")
+                      continue
+
+                  if not parts[0].startswith("THE_MAPPS"):
+                      continue
+
+                  target = (destination / Path(*parts)).resolve()
+
+                  if target != destination and destination not in target.parents:
+                      raise RuntimeError(f"Unsafe archive path: {name}")
+
+                  if info.is_dir():
+                      target.mkdir(parents=True, exist_ok=True)
+                      continue
+
+                  target.parent.mkdir(parents=True, exist_ok=True)
+
+                  with z.open(info) as source, target.open("wb") as output:
+                      shutil.copyfileobj(source, output)
+
+          print("Archive extraction completed.")
+          PY
+
+          PROJECT_ROOT="$INNER_DIR/THE_MAPPS"
+
+          if [ ! -d "$PROJECT_ROOT" ]; then
+            echo "ERROR: THE_MAPPS directory was not found."
+            find "$INNER_DIR" -maxdepth 4 -print
             exit 1
           fi
 
-          echo "Gradle project found at: $PROJECT_DIR"
-          echo "$PROJECT_DIR" > "$CM_BUILD_DIR/project_dir.txt"
+          if [ ! -f "$PROJECT_ROOT/settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle.kts was not found."
+            exit 1
+          fi
 
-      - name: Prepare Kotlin iOS bridge
-        script: |
-          set -euo pipefail
-          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/project_dir.txt")"
           echo "$PROJECT_ROOT" > "$CM_BUILD_DIR/PROJECT_ROOT"
 
-          mkdir -p "$PROJECT_ROOT/composeApp/src/iosMain/kotlin/com/themapps"
-          cat > "$PROJECT_ROOT/composeApp/src/iosMain/kotlin/com/themapps/MainViewController.kt" <<'KOTLIN'
+      - name: Prepare Kotlin iOS source
+        script: |
+          set -euo pipefail
+
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
+
+          COMMON_DIR="$PROJECT_ROOT/composeApp/src/commonMain/kotlin/com/themapps"
+          IOS_DIR="$PROJECT_ROOT/composeApp/src/iosMain/kotlin/com/themapps"
+
+          mkdir -p "$IOS_DIR"
+
+          if [ -f "$COMMON_DIR/MainViewController.kt" ]; then
+            if [ -f "$IOS_DIR/MainViewController.kt" ]; then
+              rm "$COMMON_DIR/MainViewController.kt"
+            else
+              mv "$COMMON_DIR/MainViewController.kt" "$IOS_DIR/MainViewController.kt"
+            fi
+          fi
+
+          cat > "$IOS_DIR/MainViewController.kt" <<'KOTLIN'
           package com.themapps
 
           import androidx.compose.ui.window.ComposeUIViewController
           import platform.UIKit.UIViewController
 
-          fun MainViewController(): UIViewController =
-              ComposeUIViewController { App() }
+          fun MainViewController(): UIViewController {
+              return ComposeUIViewController {
+                  App()
+              }
+          }
           KOTLIN
 
-          test -f "$PROJECT_ROOT/composeApp/src/commonMain/kotlin/com/themapps/App.kt"
-          test -f "$PROJECT_ROOT/composeApp/src/commonMain/kotlin/com/themapps/TheMappsMapScreen.kt"
+          test -f "$COMMON_DIR/App.kt"
+          test -f "$COMMON_DIR/TheMappsMapScreen.kt"
 
-      - name: Generate Gradle wrapper if missing
+          echo "iOS Kotlin source prepared."
+
+      - name: Build Kotlin iOS framework
         script: |
           set -euo pipefail
+
           PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
+
           cd "$PROJECT_ROOT"
 
-          if [ ! -f ./gradlew ]; then
-            if ! command -v gradle >/dev/null 2>&1; then
-              brew install gradle
-            fi
-            TMP_GRADLE="$CM_BUILD_DIR/wrapper-project"
-            mkdir -p "$TMP_GRADLE"
-            printf 'rootProject.name = "wrapper-temp"\n' > "$TMP_GRADLE/settings.gradle"
-            printf 'tasks.register("noop")\n' > "$TMP_GRADLE/build.gradle"
-            gradle -p "$TMP_GRADLE" wrapper --gradle-version "$GRADLE_VERSION" --no-daemon
-            cp "$TMP_GRADLE/gradlew" "$PROJECT_ROOT/gradlew"
-            mkdir -p "$PROJECT_ROOT/gradle/wrapper"
-            cp "$TMP_GRADLE/gradle/wrapper/"* "$PROJECT_ROOT/gradle/wrapper/"
-            chmod +x "$PROJECT_ROOT/gradlew"
+          chmod +x ./gradlew
+
+          ./gradlew \
+            :composeApp:linkReleaseFrameworkIosArm64 \
+            --no-daemon \
+            --stacktrace
+
+          FRAMEWORK="$PROJECT_ROOT/composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework"
+
+          if [ ! -d "$FRAMEWORK" ]; then
+            echo "ERROR: THE_MAPPS.framework was not generated."
+            find "$PROJECT_ROOT/composeApp/build/bin" -maxdepth 6 -print
+            exit 1
+          fi
+
+          echo "Kotlin framework built successfully."
+
+      - name: Generate iOS Xcode project
+        script: |
+          set -euo pipefail
+
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
+
+          cd "$PROJECT_ROOT"
+
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+
+          mkdir -p iosApp
+
+          cat > iosApp/THE_MAPPSApp.swift <<'SWIFT'
+          import SwiftUI
+
+          @main
+          struct THE_MAPPSApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView().ignoresSafeArea()
+                  }
+              }
+          }
+          SWIFT
+
+          cat > iosApp/ContentView.swift <<'SWIFT'
+          import SwiftUI
+          import THE_MAPPS
+
+          struct ContentView: UIViewControllerRepresentable {
+              func makeUIViewController(context: Context) -> UIViewController {
+                  MainViewControllerKt.MainViewController()
+              }
+
+              func updateUIViewController(
+                  _ uiViewController: UIViewController,
+                  context: Context
+              ) {}
+          }
+          SWIFT
+
+          cat > iosApp/project.yml <<'YAML'
+          name: THE_MAPPS
+
+          options:
+            bundleIdPrefix: com.themapps
+            deploymentTarget:
+              iOS: "16.0"
+
+          targets:
+            THE_MAPPS:
+              type: application
+              platform: iOS
+
+              sources:
+                - path: THE_MAPPSApp.swift
+                - path: ContentView.swift
+
+              dependencies:
+                - framework: ../composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework
+                  embed: false
+
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.themapps.ios
+                  PRODUCT_NAME: THE_MAPPS
+                  SWIFT_VERSION: "5.0"
+                  IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  GENERATE_INFOPLIST_FILE: YES
+                  INFOPLIST_KEY_CFBundleDisplayName: THE_MAPPS
+                  CODE_SIGNING_ALLOWED: NO
+                  CODE_SIGNING_REQUIRED: NO
+                  CODE_SIGN_IDENTITY: ""
+          YAML
+
+          xcodegen generate \
+            --spec iosApp/project.yml \
+            --project iosApp
+
+          test -d iosApp/THE_MAPPS.xcodeproj
+
+      - name: Build unsigned iOS app and package IPA
+        script: |
+          set -euo pipefail
+
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
+          DERIVED_DATA="$CM_BUILD_DIR/DerivedData"
+
+          cd "$PROJECT_ROOT"
+
+          xcodebuild \
+            -project iosApp/THE_MAPPS.xcodeproj \
+            -scheme THE_MAPPS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+          APP_PATH="$DERIVED_DATA/Build/Products/Release-iphoneos/THE_MAPPS.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: THE_MAPPS.app was not generated."
+            exit 1
+          fi
+
+          mkdir -p "$CM_BUILD_DIR/ipa/Payload"
+
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/ipa/Payload/THE_MAPPS.app"
+
+          cd "$CM_BUILD_DIR/ipa"
+
+          /usr/bin/zip -qry \
+            "$CM_BUILD_DIR/THE_MAPPS_unsigned.ipa" \
+            Payload
+
+          test -f "$CM_BUILD_DIR/THE_MAPPS_unsigned.ipa"
+
+          echo "Unsigned IPA created successfully."
+
+    artifacts:
+      - $CM_BUILD_DIR/THE_MAPPS_unsigned.ipa
+      - $CM_BUILD_DIR/DerivedData/Build/Products/Release-iphoneos/THE_MAPPS.app
+      - $CM_BUILD_DIR/**/THE_MAPPS.framework
