@@ -17,7 +17,7 @@ workflows:
         script: |
           set -euo pipefail
           mkdir -p "$CM_BUILD_DIR/download" "$CM_BUILD_DIR/unpacked"
-          ARCHIVE_URL="https://raw.githubusercontent.com/${REPOSITORY}/${BRANCH}/${OUTER_ARCHIVE}"
+          ARCHIVE_URL="https://github.com/YaDa42/MAPS/releases/download/%601/THE_MAPPS_starter.zip"
           curl --fail --location --retry 3 "$ARCHIVE_URL" \
             --output "$CM_BUILD_DIR/download/outer.zip"
           echo "Downloaded outer archive:"
