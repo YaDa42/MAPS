@@ -56,10 +56,6 @@ workflows:
           GRADLE_BIN=$(command -v gradle || true)
 
           if [ -z "$GRADLE_BIN" ]; then
-            GRADLE_BIN="/Users/builder/programs/gradle-8.14.1/bin/gradle"
-          fi
-
-          if [ ! -x "$GRADLE_BIN" ]; then
             echo "ERROR: System Gradle not found."
             exit 1
           fi
@@ -68,7 +64,16 @@ workflows:
           "$GRADLE_BIN" --version
 
           TEMP_WRAPPER="$CM_BUILD_DIR/gradle-wrapper-temp"
+
           mkdir -p "$TEMP_WRAPPER"
+
+          cat > "$TEMP_WRAPPER/settings.gradle" <<'EOF'
+          rootProject.name = "gradle-wrapper-temp"
+          EOF
+
+          cat > "$TEMP_WRAPPER/build.gradle" <<'EOF'
+          // Temporary project used only to generate Gradle Wrapper.
+          EOF
 
           "$GRADLE_BIN" -p "$TEMP_WRAPPER" wrapper \
             --gradle-version 9.6.0 \
@@ -84,7 +89,8 @@ workflows:
 
           chmod +x "$PROJECT_ROOT/gradlew"
 
-          echo "Gradle Wrapper generated successfully."
+          echo "===== GENERATED WRAPPER ====="
+          ls -la "$PROJECT_ROOT/gradle/wrapper"
 
       - name: Check iOS target
         script: |
