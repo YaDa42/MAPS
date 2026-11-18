@@ -9,7 +9,7 @@ workflows:
       vars:
         APP_NAME: THE_MAPPS
         BUNDLE_ID: com.themapps.ios
-        RELEASE_URL: "https://github.com/YaDa42/MAPS/releases/download/lastest"
+        RELEASE_URL: "https://github.com/YaDa42/MAPS/releases/download/%601/THE_MAPPS_starter.zip"
       xcode: latest
 
     scripts:
