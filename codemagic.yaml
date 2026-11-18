@@ -1,0 +1,103 @@
+
+workflows:
+  themapps-ios:
+    name: THE_MAPPS iOS
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: latest
+      java: 21
+
+    scripts:
+      - name: Extract THE_MAPPS starter
+        script: |
+          set -e
+
+          ARCHIVE="$CM_BUILD_DIR/THE_MAPPS_starter.zip"
+
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "ERROR: THE_MAPPS_starter.zip not found"
+            exit 1
+          fi
+
+          mkdir -p "$CM_BUILD_DIR/project"
+          unzip -q "$ARCHIVE" -d "$CM_BUILD_DIR/project"
+
+          echo "Archive extracted."
+          find "$CM_BUILD_DIR/project" -maxdepth 4 \
+            \( -name "settings.gradle.kts" \
+            -o -name "build.gradle.kts" \
+            -o -name "*.xcodeproj" \
+            -o -name "*.xcworkspace" \) -print
+
+      - name: Locate project
+        script: |
+          set -e
+
+          PROJECT_DIR="$CM_BUILD_DIR/project"
+
+          SETTINGS=$(find "$PROJECT_DIR" -name settings.gradle.kts -print -quit)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: settings.gradle.kts not found"
+            exit 1
+          fi
+
+          PROJECT_ROOT=$(dirname "$SETTINGS")
+          echo "Project root: $PROJECT_ROOT"
+
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$CM_ENV"
+
+          find "$PROJECT_ROOT" -maxdepth 4 -type f | head -200
+
+      - name: Check iOS project
+        script: |
+          set -e
+          cd "$PROJECT_ROOT"
+
+          if [ ! -d "iosApp" ]; then
+            echo "No iosApp directory found."
+            echo "The project may need an iOS Xcode project or framework setup."
+            exit 1
+          fi
+
+          find iosApp -maxdepth 3 -type f -print
+
+      - name: Build iOS
+        script: |
+          set -e
+          cd "$PROJECT_ROOT/iosApp"
+
+          if [ -d "*.xcworkspace" ]; then
+            echo "Workspace detected"
+          fi
+
+          WORKSPACE=$(find . -maxdepth 2 -name "*.xcworkspace" -print -quit)
+          PROJECT=$(find . -maxdepth 2 -name "*.xcodeproj" -print -quit)
+
+          if [ -n "$WORKSPACE" ]; then
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$(basename "$WORKSPACE" .xcworkspace)" \
+              -sdk iphonesimulator \
+              -configuration Debug \
+              -destination 'generic/platform=iOS Simulator' \
+              CODE_SIGNING_ALLOWED=NO \
+              build
+          elif [ -n "$PROJECT" ]; then
+            xcodebuild \
+              -project "$PROJECT" \
+              -sdk iphonesimulator \
+              -configuration Debug \
+              -destination 'generic/platform=iOS Simulator' \
+              CODE_SIGNING_ALLOWED=NO \
+              build
+          else
+            echo "ERROR: No Xcode project or workspace found."
+            exit 1
+          fi
+
+    artifacts:
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
