@@ -1,113 +1,96 @@
-          fi
+workflows:
+  themapps-ios:
+    name: THE_MAPPS iOS unsigned IPA
+    max_build_duration: 120
+    instance_type: mac_mini_m2
 
-          mkdir -p iosApp
+    environment:
+      vars:
+        REPOSITORY: "YaDa42/MAPS"
+        BRANCH: "main"
+        OUTER_ARCHIVE: "THE_MAPPS_starter.zip"
+        GRADLE_VERSION: "9.6.0"
+      xcode: latest
 
-          cat > iosApp/THE_MAPPSApp.swift <<'SWIFT'
-          import SwiftUI
-
-          @main
-          struct THE_MAPPSApp: App {
-              var body: some Scene {
-                  WindowGroup {
-                      ContentView()
-                          .ignoresSafeArea()
-                  }
-              }
-          }
-          SWIFT
-
-          cat > iosApp/ContentView.swift <<'SWIFT'
-          import SwiftUI
-          import THE_MAPPS
-
-          struct ContentView: UIViewControllerRepresentable {
-              func makeUIViewController(context: Context) -> UIViewController {
-                  MainViewControllerKt.MainViewController()
-              }
-
-              func updateUIViewController(
-                  _ uiViewController: UIViewController,
-                  context: Context
-              ) {}
-          }
-          SWIFT
-
-          cat > iosApp/project.yml <<'YAML'
-          name: THE_MAPPS
-
-          options:
-            bundleIdPrefix: com.themapps
-            deploymentTarget:
-              iOS: "16.0"
-
-          targets:
-            THE_MAPPS:
-              type: application
-              platform: iOS
-              sources:
-                - path: THE_MAPPSApp.swift
-                - path: ContentView.swift
-              dependencies:
-                - framework: ../composeApp/build/bin/iosArm64/releaseFramework/THE_MAPPS.framework
-                  embed: false
-              settings:
-                base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.themapps.ios
-                  PRODUCT_NAME: THE_MAPPS
-                  SWIFT_VERSION: "5.0"
-                  IPHONEOS_DEPLOYMENT_TARGET: "16.0"
-                  TARGETED_DEVICE_FAMILY: "1,2"
-                  GENERATE_INFOPLIST_FILE: YES
-                  INFOPLIST_KEY_CFBundleDisplayName: THE_MAPPS
-                  CODE_SIGNING_ALLOWED: NO
-                  CODE_SIGNING_REQUIRED: NO
-                  CODE_SIGN_IDENTITY: ""
-          YAML
-
-          xcodegen generate \
-            --spec iosApp/project.yml \
-            --project iosApp
-
-          test -d iosApp/THE_MAPPS.xcodeproj
-          echo "Xcode project generated with THE_MAPPS.framework dependency."
-
-      - name: Build unsigned iOS app and package IPA
+    scripts:
+      - name: Download outer archive from GitHub
         script: |
           set -euo pipefail
-          source "$CM_ENV"
-          cd "$PROJECT_ROOT"
+          mkdir -p "$CM_BUILD_DIR/download" "$CM_BUILD_DIR/unpacked"
+          ARCHIVE_URL="https://raw.githubusercontent.com/${REPOSITORY}/${BRANCH}/${OUTER_ARCHIVE}"
+          curl --fail --location --retry 3 "$ARCHIVE_URL" \
+            --output "$CM_BUILD_DIR/download/outer.zip"
+          echo "Downloaded outer archive:"
+          ls -lh "$CM_BUILD_DIR/download/outer.zip"
+          /usr/bin/unzip -t "$CM_BUILD_DIR/download/outer.zip"
 
-          DERIVED_DATA="$CM_BUILD_DIR/DerivedData"
+      - name: Extract outer archive and find nested source archive
+        script: |
+          set -euo pipefail
+          OUTER_DIR="$CM_BUILD_DIR/unpacked/outer"
+          INNER_DIR="$CM_BUILD_DIR/unpacked/inner"
+          mkdir -p "$OUTER_DIR" "$INNER_DIR"
 
-          xcodebuild \
-            -project iosApp/THE_MAPPS.xcodeproj \
-            -scheme THE_MAPPS \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
+          /usr/bin/unzip -q "$CM_BUILD_DIR/download/outer.zip" -d "$OUTER_DIR"
 
-          APP_PATH="$DERIVED_DATA/Build/Products/Release-iphoneos/THE_MAPPS.app"
-          if [ ! -d "$APP_PATH" ]; then
-            echo "ERROR: Xcode did not produce THE_MAPPS.app."
+          INNER_ARCHIVE="$(find "$OUTER_DIR" -type f \( -iname '*.zip' -o -iname '*.ZIP' \) -print -quit)"
+          if [ -z "$INNER_ARCHIVE" ]; then
+            echo "ERROR: The downloaded outer archive does not contain a second ZIP archive."
+            echo "Files found inside the outer archive:"
+            find "$OUTER_DIR" -maxdepth 4 -type f -print
             exit 1
           fi
 
-          IPA_ROOT="$CM_BUILD_DIR/ipa_payload"
-          rm -rf "$IPA_ROOT"
-          mkdir -p "$IPA_ROOT/Payload"
-          cp -R "$APP_PATH" "$IPA_ROOT/Payload/THE_MAPPS.app"
+          echo "Nested archive found: $INNER_ARCHIVE"
+          /usr/bin/unzip -t "$INNER_ARCHIVE"
+          /usr/bin/unzip -q "$INNER_ARCHIVE" -d "$INNER_DIR"
 
-          cd "$IPA_ROOT"
-          /usr/bin/zip -qry "$CM_BUILD_DIR/THE_MAPPS_unsigned.ipa" Payload
+          PROJECT_DIR="$(find "$INNER_DIR" -type f \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) -print -quit | xargs -r dirname)"
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: No Gradle project was found inside the nested archive."
+            find "$INNER_DIR" -maxdepth 5 -type f -print
+            exit 1
+          fi
 
-          echo "Unsigned IPA created: $CM_BUILD_DIR/THE_MAPPS_unsigned.ipa"
+          echo "Gradle project found at: $PROJECT_DIR"
+          echo "$PROJECT_DIR" > "$CM_BUILD_DIR/project_dir.txt"
 
-    artifacts:
-      - $CM_BUILD_DIR/THE_MAPPS_unsigned.ipa
-      - $CM_BUILD_DIR/DerivedData/Build/Products/Release-iphoneos/THE_MAPPS.app
-      - $CM_BUILD_DIR/**/THE_MAPPS.framework
+      - name: Prepare Kotlin iOS bridge
+        script: |
+          set -euo pipefail
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/project_dir.txt")"
+          echo "$PROJECT_ROOT" > "$CM_BUILD_DIR/PROJECT_ROOT"
+
+          mkdir -p "$PROJECT_ROOT/composeApp/src/iosMain/kotlin/com/themapps"
+          cat > "$PROJECT_ROOT/composeApp/src/iosMain/kotlin/com/themapps/MainViewController.kt" <<'KOTLIN'
+          package com.themapps
+
+          import androidx.compose.ui.window.ComposeUIViewController
+          import platform.UIKit.UIViewController
+
+          fun MainViewController(): UIViewController =
+              ComposeUIViewController { App() }
+          KOTLIN
+
+          test -f "$PROJECT_ROOT/composeApp/src/commonMain/kotlin/com/themapps/App.kt"
+          test -f "$PROJECT_ROOT/composeApp/src/commonMain/kotlin/com/themapps/TheMappsMapScreen.kt"
+
+      - name: Generate Gradle wrapper if missing
+        script: |
+          set -euo pipefail
+          PROJECT_ROOT="$(cat "$CM_BUILD_DIR/PROJECT_ROOT")"
+          cd "$PROJECT_ROOT"
+
+          if [ ! -f ./gradlew ]; then
+            if ! command -v gradle >/dev/null 2>&1; then
+              brew install gradle
+            fi
+            TMP_GRADLE="$CM_BUILD_DIR/wrapper-project"
+            mkdir -p "$TMP_GRADLE"
+            printf 'rootProject.name = "wrapper-temp"\n' > "$TMP_GRADLE/settings.gradle"
+            printf 'tasks.register("noop")\n' > "$TMP_GRADLE/build.gradle"
+            gradle -p "$TMP_GRADLE" wrapper --gradle-version "$GRADLE_VERSION" --no-daemon
+            cp "$TMP_GRADLE/gradlew" "$PROJECT_ROOT/gradlew"
+            mkdir -p "$PROJECT_ROOT/gradle/wrapper"
+            cp "$TMP_GRADLE/gradle/wrapper/"* "$PROJECT_ROOT/gradle/wrapper/"
+            chmod +x "$PROJECT_ROOT/gradlew"
