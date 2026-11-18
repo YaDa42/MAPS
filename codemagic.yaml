@@ -3,7 +3,7 @@ workflows:
   themapps-ios:
     name: THE_MAPPS iOS Framework
     max_build_duration: 120
-    instance_type: mac_mini_m2
+    instance_type: mac_mini
 
     environment:
       xcode: latest
@@ -47,18 +47,50 @@ workflows:
           echo "Project root: $PROJECT_ROOT"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$CM_ENV"
 
-      - name: Check iOS target
+      - name: Generate Gradle Wrapper
         script: |
           set -e
+
           cd "$PROJECT_ROOT"
 
-          if [ ! -f "./gradlew" ]; then
-            echo "ERROR: Gradle wrapper not found."
-            find . -maxdepth 5 -type f
+          GRADLE_BIN=$(command -v gradle || true)
+
+          if [ -z "$GRADLE_BIN" ]; then
+            GRADLE_BIN="/Users/builder/programs/gradle-8.14.1/bin/gradle"
+          fi
+
+          if [ ! -x "$GRADLE_BIN" ]; then
+            echo "ERROR: System Gradle not found."
             exit 1
           fi
 
-          chmod +x ./gradlew
+          echo "===== SYSTEM GRADLE ====="
+          "$GRADLE_BIN" --version
+
+          TEMP_WRAPPER="$CM_BUILD_DIR/gradle-wrapper-temp"
+          mkdir -p "$TEMP_WRAPPER"
+
+          "$GRADLE_BIN" -p "$TEMP_WRAPPER" wrapper \
+            --gradle-version 9.6.0 \
+            --no-daemon
+
+          cp "$TEMP_WRAPPER/gradlew" "$PROJECT_ROOT/gradlew"
+          cp "$TEMP_WRAPPER/gradlew.bat" "$PROJECT_ROOT/gradlew.bat"
+
+          mkdir -p "$PROJECT_ROOT/gradle/wrapper"
+
+          cp "$TEMP_WRAPPER/gradle/wrapper/"* \
+            "$PROJECT_ROOT/gradle/wrapper/"
+
+          chmod +x "$PROJECT_ROOT/gradlew"
+
+          echo "Gradle Wrapper generated successfully."
+
+      - name: Check iOS target
+        script: |
+          set -e
+
+          cd "$PROJECT_ROOT"
 
           echo "===== GRADLE VERSION ====="
           ./gradlew --version
@@ -70,6 +102,7 @@ workflows:
       - name: Build THE_MAPPS iOS framework
         script: |
           set -e
+
           cd "$PROJECT_ROOT"
 
           ./gradlew :composeApp:linkReleaseFrameworkIosArm64 \
@@ -85,6 +118,7 @@ workflows:
       - name: Verify framework
         script: |
           set -e
+
           cd "$PROJECT_ROOT"
 
           FRAMEWORK=$(find composeApp/build \
