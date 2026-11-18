@@ -3,7 +3,7 @@ workflows:
   themapps-ios:
     name: THE_MAPPS iOS Framework
     max_build_duration: 120
-    instance_type: Mac16,2
+    instance_type: mac_mini
 
     environment:
       xcode: latest
@@ -54,6 +54,7 @@ workflows:
 
           if [ ! -f "./gradlew" ]; then
             echo "ERROR: Gradle wrapper not found."
+            find . -maxdepth 5 -type f
             exit 1
           fi
 
@@ -104,4 +105,5 @@ workflows:
 
     publishing:
       email:
-        recipients: []
+        recipients:
+          - "$CM_EMAIL"
