@@ -1,3 +1,4 @@
+
 workflows:
   themapps-ios:
     name: THE_MAPPS iOS Build
@@ -16,7 +17,13 @@ workflows:
         script: |
           set -e
 
+          echo "Removing outdated Homebrew tap..."
+          brew untap homebrew/autoupdate || true
+
+          echo "Updating Homebrew..."
           brew update
+
+          echo "Installing XcodeGen..."
           brew install xcodegen
 
           python3 --version
@@ -298,6 +305,9 @@ workflows:
 
           /usr/libexec/PlistBuddy \
             -c "Print :CADisableMinimumFrameDurationOnPhone" \
+            "$CM_BUILD_DIR/ipa_verify/Payload/THE_MAPPS.app/Info.plist"
+
+          plutil -lint \
             "$CM_BUILD_DIR/ipa_verify/Payload/THE_MAPPS.app/Info.plist"
 
           echo "IPA verification completed."
