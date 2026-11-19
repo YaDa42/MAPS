@@ -183,9 +183,8 @@ workflows:
                 - path: ContentView.swift
 
               dependencies:
-                - framework:
-                    path: $FRAMEWORK_PATH
-                    embed: true
+                - framework: $FRAMEWORK_PATH
+                  embed: true
 
               settings:
                 base:
@@ -204,6 +203,7 @@ workflows:
 
           cd iosApp
 
+          echo "Generating Xcode project..."
           xcodegen generate
 
           echo "Generated Xcode project:"
