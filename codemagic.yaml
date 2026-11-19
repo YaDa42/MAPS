@@ -1,4 +1,5 @@
 
+
 workflows:
   themapps-ios:
     name: THE_MAPPS iOS Build
@@ -37,7 +38,6 @@ workflows:
           cd "$CM_BUILD_DIR"
 
           echo "Downloading THE_MAPPS starter archive..."
-
           curl -fL "$ARCHIVE_URL" -o outer.zip
 
           mkdir -p extracted_outer
@@ -93,7 +93,6 @@ workflows:
           fi
 
           echo "Project root: $PROJECT_ROOT"
-
           echo "$PROJECT_ROOT" > "$CM_BUILD_DIR/project_root.txt"
 
       - name: Build Kotlin iOS framework
@@ -101,7 +100,6 @@ workflows:
           set -e
 
           PROJECT_ROOT="$(cat "$CM_BUILD_DIR/project_root.txt")"
-
           cd "$PROJECT_ROOT"
 
           chmod +x ./gradlew
@@ -132,12 +130,12 @@ workflows:
           FRAMEWORK_PATH="$(cat "$CM_BUILD_DIR/framework_path.txt")"
 
           cd "$PROJECT_ROOT"
-
           mkdir -p iosApp
 
           cat > iosApp/ContentView.swift <<'SWIFT'
           import SwiftUI
           import UIKit
+          import THE_MAPPS
 
           struct ContentView: UIViewControllerRepresentable {
               func makeUIViewController(context: Context) -> UIViewController {
@@ -214,7 +212,6 @@ workflows:
           set -e
 
           PROJECT_ROOT="$(cat "$CM_BUILD_DIR/project_root.txt")"
-
           cd "$PROJECT_ROOT"
 
           xcodebuild \
@@ -285,11 +282,9 @@ workflows:
           fi
 
           mkdir -p "$CM_BUILD_DIR/ipa/Payload"
-
           cp -R "$APP_PATH" "$CM_BUILD_DIR/ipa/Payload/"
 
           cd "$CM_BUILD_DIR/ipa"
-
           zip -qry "$IPA_PATH" Payload
 
           echo "IPA created:"
